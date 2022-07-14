@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+
 	"github.com/hashicorp/terraform-plugin-sdk/v2/diag"
 	"github.com/hashicorp/terraform-plugin-sdk/v2/helper/schema"
 	"github.com/okta/okta-sdk-golang/v2/okta"
@@ -72,9 +73,15 @@ func resourceAppSaml() *schema.Resource {
 				Description: "Certificate ID",
 				Computed:    true,
 			},
-			"key_values": {
+			"key_years_valid": {
+				Type:             schema.TypeInt,
+				Optional:         true,
+				ValidateDiagFunc: intBetween(2, 10),
+				Description:      "Number of years the certificate is valid.",
+			},
+			"keys": {
 				Type:        schema.TypeList,
-				Description: "Certificate values",
+				Description: "Application keys",
 				Computed:    true,
 				Elem: &schema.Resource{
 					Schema: map[string]*schema.Schema{
@@ -126,12 +133,6 @@ func resourceAppSaml() *schema.Resource {
 						},
 					},
 				},
-			},
-			"key_years_valid": {
-				Type:             schema.TypeInt,
-				Optional:         true,
-				ValidateDiagFunc: intBetween(2, 10),
-				Description:      "Number of years the certificate is valid.",
 			},
 			"metadata": {
 				Type:        schema.TypeString,
@@ -505,28 +506,14 @@ func resourceAppSamlRead(ctx context.Context, d *schema.ResourceData, m interfac
 		_ = d.Set("certificate", desc.KeyDescriptors[0].KeyInfo.X509Data.X509Certificates[0].Data)
 	}
 
-	certs, err := handleLoadingExistingCertificates(ctx, m, app.Id)
+	keys, err := fetchAppKeys(ctx, m, app.Id)
+
 	if err != nil {
-		return diag.Errorf("failed to load existing certificates for SAML application: %v", err)
+		return diag.Errorf("failed to load existing keys for SAML application: %f", err)
 	}
 
-	arr := make([]map[string]interface{}, len(certs))
-	for i, cert := range certs {
-		arr[i] = map[string]interface{}{
-			"kty":        cert.Kty,
-			"kid":        cert.Kid,
-			"e":          cert.E,
-			"n":          cert.N,
-			"created":    cert.Created.String(),
-			"expires_at": cert.Expires_at.String(),
-			"use":        cert.Use,
-			"x5c":        cert.X5c,
-			"x5t_s256":   cert.X5t_s256,
-		}
-	}
-	err = setNonPrimitives(d, map[string]interface{}{"key_values": arr})
-	if err != nil {
-		return diag.Errorf("Failed to set Application Credential Key Values: %v", err)
+	if err := setAppKeys(d, keys); err != nil {
+		return diag.Errorf("failed to set Application Credential Key Values: %v", err)
 	}
 
 	appRead(d, app.Name, app.Status, app.SignOnMode, app.Label, app.Accessibility, app.Visibility, app.Settings.Notes)
@@ -729,20 +716,6 @@ func generateCertificate(ctx context.Context, d *schema.ResourceData, m interfac
 	var key *okta.JsonWebKey
 	_, err = requestExecutor.Do(ctx, req, &key)
 	return key, err
-}
-
-// Keep in mind that at the time of writing this the official SDK did not support generating certs.
-func handleLoadingExistingCertificates(ctx context.Context, m interface{}, appID string) ([]*ApplicationKeyCredential, error) {
-	requestExecutor := getRequestExecutor(m)
-	url := fmt.Sprintf("/api/v1/apps/%s/credentials/keys", appID)
-	req, err := requestExecutor.NewRequest("GET", url, nil)
-	if err != nil {
-		return nil, err
-	}
-	req = req.WithContext(ctx)
-	var certs []*ApplicationKeyCredential
-	_, err = requestExecutor.Do(ctx, req, &certs)
-	return certs, err
 }
 
 func tryCreateCertificate(ctx context.Context, d *schema.ResourceData, m interface{}, appID string) error {
