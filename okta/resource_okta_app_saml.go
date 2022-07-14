@@ -727,9 +727,8 @@ func tryCreateCertificate(ctx context.Context, d *schema.ResourceData, m interfa
 
 		// Set ID and the read done at the end of update and create will do the GET on metadata
 		_ = d.Set("key_id", key.Kid)
-
-		//_ = d.Set("key_value", key)
 	}
+
 	return nil
 }
 
